@@ -1,0 +1,677 @@
+listOfSequentialExecutions = [:]
+listOfParallelExecutions = [:]
+serverRuns = [:]
+agentRuns = [:]
+agentSequentialExecutionDetails = [:]
+serverCucumberTags = [:]
+serverArchiveKey = [:]
+serverArchiveUrl = [:]
+tagMappings = [:]
+
+def setServerList(serverOS, cucumberTag, archiveKey, archiveUrl) {
+    tagMappings.each { tagMapping ->
+        String osTag = tagMapping.key
+        cucumberTag = cucumberTag.replaceAll(osTag, tagMappings[osTag])
+    }
+
+    serverCucumberTags[serverOS] = cucumberTag
+    serverArchiveKey[serverOS] = "http://${REPO_HOSTNAME}/${archiveKey}"
+    serverArchiveUrl[serverOS] = "http://${REPO_HOSTNAME}/${archiveUrl}"
+}
+
+def setSequentialFeatureExecution(serverOS, agentOS, actionType, applicationName, browserName, cucumberTag, threadCount) {
+    String actionDetails = "${actionType}/${applicationName}/${cucumberTag}/${browserName}/${threadCount}"
+
+    tagMappings.each { tagMapping ->
+        String osTag = tagMapping.key
+        actionDetails = actionDetails.replaceAll(osTag, tagMappings[osTag])
+    }
+    agentSequentialExecutionDetails.clear()
+    if(listOfSequentialExecutions != null && listOfSequentialExecutions[serverOS] != null) {
+        agentSequentialExecutionDetails = listOfSequentialExecutions[serverOS].clone()
+        agentSequentialExecutionDetails[agentOS] =  (agentSequentialExecutionDetails[agentOS] != null && agentSequentialExecutionDetails[agentOS] != "" ? agentSequentialExecutionDetails[agentOS] + "," + actionDetails : actionDetails)
+    } else {
+        agentSequentialExecutionDetails[agentOS] =  actionDetails
+    }
+    listOfSequentialExecutions[serverOS] = agentSequentialExecutionDetails.clone()
+}
+
+def setParallelFeatureExecution(serverOS, agentOS, actionType, applicationName, browserName, cucumberTag, threadCount) {
+    String actionDetails = "${actionType}/${applicationName}/${cucumberTag}/${browserName}/${threadCount}"
+    agentParallelExecutionDetails.clear()
+    if(listOfParallelExecutions != null && listOfParallelExecutions[serverOS] != null) {
+        agentParallelExecutionDetails = listOfParallelExecutions[serverOS].clone()
+        agentParallelExecutionDetails[agentOS] =  (agentParallelExecutionDetails[agentOS] != null && agentParallelExecutionDetails[agentOS] != "" ? agentParallelExecutionDetails[agentOS] + "," + actionDetails : actionDetails)
+    } else {
+        agentParallelExecutionDetails[agentOS] =  actionDetails
+    }
+    listOfParallelExecutions[serverOS] = agentParallelExecutionDetails.clone()
+}
+
+def getChangeLogFormattedForDisplay() {
+    def changeLog = "" + currentBuild.changeSets.collect({
+        it.items.collect({ "${it.author} ${it.commitId} ${it.msg}" }).join("\n")
+    }).join("\n")
+
+    return changeLog ? changeLog : "No Commits or Changes"
+}
+
+def getNodeIP() {
+     sh('''ip addr show "${networkAdapter}" | grep 'inet ' | awk '{print $2}' | cut -d/ -f1 > outFile''')
+     return readFile('outFile').trim()
+}
+
+def setTagMap(osTag, testSetTag) {
+    tagMappings[osTag] = testSetTag
+}
+
+def setEnvironment(serverOS, agentOS, repoURL, repoKey, productName,
+                              releaseVersion, buildNumber,  networkAdapter, logLevel) {
+    String cucumberTag = "@TESTSET_QA-2336"
+    if(agentOS == "In-Server") {
+        cucumberTag = cucumberTag + " and @${serverOS}"
+    } else {
+        cucumberTag = cucumberTag + " and @${agentOS}"
+    }
+
+    tagMappings.each { tagMapping ->
+        String osTag = tagMapping.key
+        cucumberTag = cucumberTag.replaceAll(osTag, tagMappings[osTag])
+    }
+
+     sh("sudo java -jar -DserverOS=${serverOS} -Dcucumber.filter.tags='${cucumberTag}' -DagentOS=${agentOS} \
+        -DactionType=Set -DapplicationName=Environment -DlogLevel=${logLevel} \
+        -DTARGET_NO_SSH='true' -DrepoURL='${repoURL}' \
+        -DrepoKey='${repoKey}' \
+        -DnetworkAdapter='${networkAdapter}' -Dthreads=1 \
+        -DprotocolPort='80' -Dprotocol='http' -DagentBrowser='NA' \
+        -DproductName='${productName}' -DreleaseVersion='${releaseVersion}' -DbuildNumber='${buildNumber}' \
+        ./target/huseby.jar classpath:features 2>&1 | tee ./${serverOS}_SetupEnvironment.log"
+     )
+}
+
+def installjCapeServer(serverOS, cucumberTag, repoURL, repoKey, productName,
+     releaseVersion, buildNumber,  networkAdapter, logLevel) {
+     String currentNodeIP = getNodeIP()
+
+     sh("sudo java -jar -DserverOS=${serverOS} -Dcucumber.filter.tags='${cucumberTag}' -DagentOS= \
+        -DactionType=Install -DapplicationName=jCape-Server -DlogLevel=${logLevel} \
+        -DTARGET_NO_SSH='true' -DrepoURL='${repoURL}' \
+        -DrepoKey='${repoKey}' -Dthreads=1 \
+        -DnetworkAdapter='${networkAdapter}' -Dhost='${currentNodeIP}' \
+        -DprotocolPort='80' -Dprotocol='http' -DagentBrowser='NA' \
+        -DproductName='${productName}' -DreleaseVersion='${releaseVersion}' -DbuildNumber='${buildNumber}' \
+        ./target/huseby.jar classpath:features 2>&1 | tee ./${serverOS}_In-Server_jCape-Server.log"
+     )
+}
+
+def testSequentialExecutionInServer(serverOS, agentOS, agentRunInfo, repoURL, repoKey, productName,
+    releaseVersion, buildNumber, networkAdapter, logLevel) {
+
+    echo "agentRunInfo - ${agentRunInfo}"
+    def agentExecutionItems = agentRunInfo.tokenize(',')
+    for (String agentExecutionItem : agentExecutionItems) {
+        echo "Agent for consideration - ${agentExecutionItem}"
+        def agentExecutionDetails = agentExecutionItem.tokenize('/')
+        echo "tokenize complete"
+        String actionType = agentExecutionDetails[0]
+        echo "index 0"
+        String applicationName = agentExecutionDetails[1]
+        echo "index 1"
+        String cucumberTag = agentExecutionDetails[2]
+        echo "index 2"
+    	String agentBrowser = agentExecutionDetails[3]
+    	String threadCount = agentExecutionDetails[4]
+        String currentNodeIP = getNodeIP()
+
+        sh("sudo java -jar -DserverOS=${serverOS} -Dcucumber.filter.tags='${cucumberTag}' -DagentOS=${agentOS} \
+            -DactionType=${actionType} -DapplicationName=${applicationName} -DlogLevel=${logLevel} \
+            -DTARGET_NO_SSH='true' -DrepoURL='${repoURL}' \
+            -DrepoKey='${repoKey}' \
+            -DnetworkAdapter='${networkAdapter}' -DcurrentNodeIP='${currentNodeIP}' -Dhost='${currentNodeIP}' \
+            -DprotocolPort='80' -Dprotocol='http' \
+      		-DagentBrowser=${agentBrowser} -Dheadless=true -Dthreads=${threadCount} \
+            -DproductName='${productName}' -DreleaseVersion='${releaseVersion}' -DbuildNumber='${buildNumber}' \
+            ./target/huseby.jar classpath:features 2>&1 | tee ./${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}.log"
+        )
+    }
+}
+
+def testSequentialExecutionRemoteAgent(serverOS, agentList, repoURL, repoKey, productName,
+    releaseVersion, buildNumber, networkAdapter, logLevel, NODE_INSTANCE_IP) {
+
+    agentList.findAll { it.key != "In-Server" }.each { executionItem ->
+        String agentOS = executionItem.key
+        def agentRunList = agentList[agentOS]
+        def agentTaskList = agentRunList.tokenize(',')
+        echo " agentRunList - ${agentRunList}"
+        if(agentOS != "In-Server") {
+            node("qa-${agentOS}") {
+                echo " agentTaskList - ${executionItem}"
+                echo " agentList[agentOS] - ${agentList[agentOS]}"
+                unstash name: 'huseby-jar'
+
+                setEnvironment("${serverOS}", "${agentOS}", "${serverArchiveUrl[serverOS]}", "${serverArchiveKey[serverOS]}", "${productName}",
+                                                                  "${releaseVersion}", "${buildNumber}", "${networkAdapter}", "${logLevel}")
+
+                agentTaskList.each { agentExecutionItem ->
+                    def agentExecutionDetails = agentExecutionItem.tokenize('/')
+                    String actionType = agentExecutionDetails[0]
+                    String applicationName = agentExecutionDetails[1]
+                    String cucumberTag = agentExecutionDetails[2]
+					String agentBrowser = agentExecutionDetails[3]
+					String threadCount = agentExecutionDetails[4]
+                    String currentNodeIP = getNodeIP()
+                    echo "CURRENT NODE IP - ${currentNodeIP}"
+
+                    sh("sudo java -jar -Dcucumber.filter.tags='${cucumberTag}' -DserverOS=${serverOS} \
+                         -DagentOS=${agentOS} -DactionType=${actionType} -DapplicationName=${applicationName} \
+                         -DTARGET_NO_SSH='true' -DrepoURL='${repoURL}' \
+                         -DrepoKey='${repoKey}'  -DcurrentNodeIP='${currentNodeIP}' \
+                         -DnetworkAdapter='${networkAdapter}' -Dhost='${NODE_INSTANCE_IP}' \
+                         -DprotocolPort='80' -Dprotocol='http' \
+            			 -DagentBrowser=${agentBrowser} -Dheadless=true -Dthreads=${threadCount} \
+                         -DproductName='${productName}' -DreleaseVersion='${releaseVersion}' -DbuildNumber='${buildNumber}' \
+                         -DlogLevel=${logLevel} ./target/huseby.jar classpath:features 2>&1 | tee ./${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}.log")
+
+                    sh("sudo tar czvf ${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}.tar.gz ./output")
+
+                    echo("-------------debug krishnan-----------")
+                    sh("ls target/*.json")
+                    echo "stash -> json-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser} for target/MultiReport-${applicationName}-${actionType}-${agentOS}-${serverOS}-${agentBrowser}.json"
+                    stash includes: "target/MultiReport-${applicationName}-${actionType}-${agentOS}-${serverOS}-${agentBrowser}.json", name: "json-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+
+                    echo "stash -> log-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser} for ${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}.log"
+                    stash includes: "${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}.log", name: "log-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+                }
+            }
+
+            agentTaskList.each { agentExecutionItem ->
+                def agentExecutionDetails = agentExecutionItem.tokenize('/')
+                String actionType = agentExecutionDetails[0]
+                String applicationName = agentExecutionDetails[1]
+                String cucumberTag = agentExecutionDetails[2]
+				String agentBrowser = agentExecutionDetails[3]
+
+                echo "unstash -> json-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+                unstash name: "json-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+
+                echo "unstash -> log-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+                unstash name: "log-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+
+                echo "stash -> json-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+                stash name: "json-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}", excludes: "**", allowEmpty: true
+
+                echo "stash -> log-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+                stash name: "log-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}", excludes: "**", allowEmpty: true
+            }
+        }
+    }
+}
+
+def testParallelExecutionRemoteAgent(serverOS, agentList, repoURL, repoKey, productName,
+    releaseVersion, buildNumber, networkAdapter, logLevel, NODE_INSTANCE_IP) {
+
+    agentList.findAll { it.key != "In-Server" }.each { executionItem ->
+        String agentOS = executionItem.key
+        def agentRunList = agentList[agentOS]
+        def agentTaskList = agentRunList.tokenize(',')
+        echo " agentRunList - ${agentRunList}"
+        if(agentOS != "In-Server") {
+            agentRuns["${serverOS}-${agentOS}"] = {
+                node("qa-${agentOS}") {
+                    echo " agentTaskList - ${executionItem}"
+                    echo " agentList[agentOS] - ${agentList[agentOS]}"
+                    unstash name: 'huseby-jar'
+
+                    setEnvironment("${serverOS}", "${agentOS}", "${serverArchiveUrl[serverOS]}", "${serverArchiveKey[serverOS]}", "${productName}",
+                                                                      "${releaseVersion}", "${buildNumber}", "${networkAdapter}", "${logLevel}")
+
+                    agentTaskList.each { agentExecutionItem ->
+                        def agentExecutionDetails = agentExecutionItem.tokenize('/')
+                        String actionType = agentExecutionDetails[0]
+                        String applicationName = agentExecutionDetails[1]
+                        String cucumberTag = agentExecutionDetails[2]
+                        String agentBrowser = agentExecutionDetails[3]
+                        String threadCount = agentExecutionDetails[4]
+                        String currentNodeIP = getNodeIP()
+                        echo "CURRENT NODE IP - ${currentNodeIP}"
+
+                        sh("sudo java -jar -Dcucumber.filter.tags='${cucumberTag}' -DserverOS=${serverOS} \
+                             -DagentOS=${agentOS} -DactionType=${actionType} -DapplicationName=${applicationName} \
+                             -DTARGET_NO_SSH='true' -DrepoURL='${repoURL}' \
+                             -DrepoKey='${repoKey}'  -DcurrentNodeIP='${currentNodeIP}' \
+                             -DnetworkAdapter='${networkAdapter}' -Dhost='${NODE_INSTANCE_IP}' \
+                             -DprotocolPort='80' -Dprotocol='http' \
+              							 -DagentBrowser=${agentBrowser}  -Dheadless=true -Dthreads=${threadCount} \
+                             -DproductName='${productName}' -DreleaseVersion='${releaseVersion}' -DbuildNumber='${buildNumber}' \
+                             -DlogLevel=${logLevel} ./target/huseby.jar classpath:features 2>&1 | tee ./${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}.log")
+
+                        sh("sudo tar czvf ${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}.tar.gz ./output")
+
+                        echo "stash -> json-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+                        stash includes: 'target/*.json', name: "json-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+
+                        echo "stash -> log-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+                        stash includes: '*.log', name: "log-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+
+                        echo "unstash -> json-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+                        unstash name: "json-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+
+                        echo "unstash -> log-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+                        unstash name: "log-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+                    }
+                }
+
+                agentTaskList.each { agentExecutionItem ->
+                    def agentExecutionDetails = agentExecutionItem.tokenize('/')
+                    String actionType = agentExecutionDetails[0]
+                    String applicationName = agentExecutionDetails[1]
+                    String cucumberTag = agentExecutionDetails[2]
+          					String agentBrowser = agentExecutionDetails[3]
+
+                    echo "unstash -> json-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+                    unstash name: "json-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+
+                    echo "unstash -> log-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+                    unstash name: "log-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+
+                    echo "stash -> json-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+                    stash name: "json-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}", excludes: "**", allowEmpty: true
+
+                    echo "stash -> log-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}"
+                    stash name: "log-${serverOS}_${agentOS}_${applicationName}_${actionType}_${agentBrowser}", excludes: "**", allowEmpty: true
+                }
+            }
+        }
+    }
+    parallel agentRuns
+}
+
+def getRepository(neo4capeBranch) {
+    baseRepo = 'staging.huseby.com'
+
+    // If this is initiated by a build from the master branch of neo4cape, the
+    // packages are stored on the internal, development panopticops reository.
+    if(neo4capeBranch == "master") {
+        baseRepo = 'repo.panopticops.net'
+    }
+
+    return baseRepo;
+}
+
+pipeline {
+	// Run only on agent where Docker is installed
+	agent { node { label 'qa-linux-autostart-build-agent' } }
+
+    // Poll for source changes Monday-Friday starting at 8AM Eastern and stopping at 5PM Pacific.
+    // triggers { pollSCM('H/5 0,12-23 * * 1-5') }
+
+    options {
+        // Discard everything except the last 10 builds
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+
+        timestamps()
+        timeout(time: 2, unit: 'HOURS')
+    }
+
+    parameters {
+        string(name: 'neo4cape_branch', defaultValue: '', description: 'Source branch to be used for the release. If patching an existing release, use v.x.x.x format.')
+    }
+
+    environment {
+        SECONDS_SINCE_EPOCH = sh(script: 'date +%s', returnStdout: true)
+
+        CHANGE_LOG = getChangeLogFormattedForDisplay()
+
+        // make branch name safe for use as a docker tag
+        BRANCH_TAG = "${env.BRANCH_NAME}".replaceAll(/[^A-Za-z0-9_\-\.]/, "_").take(120)
+
+        // Get Jenkins Artifactory Credentials
+        ARTIFACTORY_CREDS = credentials('JenkinsArtifactory')
+
+        networkAdapter = "ens5"
+        REPO_HOSTNAME = getRepository("${params.neo4cape_branch}")
+        productName = "huseby Ubuntu Server"
+    }
+
+    stages {
+        // Only run the CI pipeline if it's one of these branches
+        stage('Check Branch') {
+            when {
+                not {
+                    expression { BRANCH_NAME ==~ /(integration|qa|master|feature\/.*)/ }
+                }
+            }
+            steps {
+                sh 'exit 1'
+            }
+        }
+
+        stage('Set build label') {
+            steps {
+                script {
+                    sh("wget -qO- http://${REPO_HOSTNAME}/debian/archive.key | sudo apt-key add -")
+                    sh("sudo add-apt-repository --update 'deb http://${REPO_HOSTNAME}/debian /'  ")
+                    def relVer = sh(returnStdout: true, script: "sudo apt-cache policy huseby | grep -oP '(?<=Candidate: ).*'")
+                    env.releaseVersion = relVer.trim()
+                    env.buildNumber = currentBuild.displayName
+                    echo "time"
+                    def startTime = sh(returnStdout: true, script: "date '+%b %d %Y, %H:%M %p %Z'" )
+                    env.executionStartTime = startTime.trim()
+                    echo "Release - ${env.releaseVersion}"
+                    currentBuild.displayName = "${currentBuild.displayName}-${env.releaseVersion}"
+                }
+            }
+        }
+
+		stage('Setup Test Environments') {
+            steps {
+                // Setting up the combinations that need to be tested
+                script {
+                    stash name: "huseby-jar", excludes: "**", allowEmpty: true
+
+                    setTagMap("@All-OS","@TESTSET_QA-2315")
+                    setTagMap("@Ubuntu-18.04","@TESTSET_QA-2308")
+                    setTagMap("@Ubuntu-20.04","@TESTSET_QA-2309")
+                    setTagMap("@Fedora-34","@TESTSET_QA-2310")
+                    setTagMap("@RHEL-8.4","@TESTSET_QA-2311")
+                    setTagMap("@Centos-7.9","@TESTSET_QA-2312")
+                    setTagMap("@Debian-10","@TESTSET_QA-2313")
+                    setTagMap("@AWS-Linux-2","@TESTSET_QA-2314")
+
+                    setTagMap("@All-Browser","@TESTSET_QA-2637")
+                    setTagMap("@Chrome","@TESTSET_QA-2648")
+                    setTagMap("@Firefox","@TESTSET_QA-2649")
+
+                    setServerList("Ubuntu-18.04", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-411","debian/archive.key","debian")
+                    setServerList("Ubuntu-20.04", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-411","debian/archive.key","debian")
+//                     setServerList("fedora-34", "(@All-OS or @Fedora-34) and @TESTSET_QA-411","","redhat/huseby-server.repo")
+//                     setServerList("RHEL-8.4", "(@All-OS or @Centos-7.9) and @TESTSET_QA-411","","redhat/huseby-server.repo")
+//
+                    // Ubuntu-18.04 server
+                    setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "Server-Defaults", "jCape-Server", "NA", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-1027", "1")
+                    setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "Audit-Rule-Defaults", "jCape-Server", "NA", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-1030", "1")
+                    setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "AWS-Defaults", "jCape-Server", "NA", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-1028", "1")
+                    setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "Service-Now-Defaults", "jCape-Server", "NA", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-1029", "1")
+                    setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "Miscellaneous", "jCape-Server", "NA", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-1265", "1")
+
+//                     setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "UI-App-Info", "jCape-Server", "firefox", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-2367 and (@All-Browser or @Firefox)", "1")
+                    setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "UI-App-Info", "jCape-Server", "chrome", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-2367 and (@All-Browser or @Chrome)", "1")
+//                     setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "UI-AWS", "jCape-Server", "firefox", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-2292 and (@All-Browser or @Firefox)", "1")
+                    setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "UI-AWS", "jCape-Server", "chrome", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-2292 and (@All-Browser or @Chrome)", "1")
+//                     setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "UI-Installers", "jCape-Server", "firefox", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-2415 and (@All-Browser or @Firefox)", "1")
+                    setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "UI-Installers", "jCape-Server", "chrome", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-2415 and (@All-Browser or @Chrome)", "1")
+
+                     setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "Analyze", "Thingsboard", "NA", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-1031", "1")
+
+//                     setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "Rules-Matches", "Java", "NA", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-1617", "1")
+//                     setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "Rules-Matches", "MySQL", "NA", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-1946", "1")
+//                     setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "Rules-Matches", "Postgres", "NA", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-1672", "1")
+//                     setSequentialFeatureExecution("Ubuntu-18.04", "In-Server", "Rules-Matches", "SQLite", "NA", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-1947", "1")
+//
+//                    // Ubuntu-18.04 Remote server
+//                     setSequentialFeatureExecution("Ubuntu-18.04", "Ubuntu-18.04", "Install", "jCape-Agent", "NA", "(@All-OS or @Ubuntu-18.04) and @TEST_QA-412", "1")
+//                     setSequentialFeatureExecution("Ubuntu-18.04", "Ubuntu-18.04", "Analyze", "Thingsboard", "NA", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-1031", "1")
+//                     setSequentialFeatureExecution("Ubuntu-18.04", "Ubuntu-20.04", "Install", "jCape-Agent", "NA", "(@All-OS or @Ubuntu-20.04) and @TEST_QA-412", "1")
+//                     setSequentialFeatureExecution("Ubuntu-18.04", "Ubuntu-20.04", "Analyze", "Thingsboard", "NA", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-1031", "1")
+
+                    // Ubuntu-20.04 server
+                    setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "Server-Defaults", "jCape-Server", "NA", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-1027", "1")
+                    setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "Audit-Rule-Defaults", "jCape-Server", "NA", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-1030", "1")
+                    setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "AWS-Defaults", "jCape-Server", "NA", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-1028", "1")
+                    setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "Service-Now-Defaults", "jCape-Server", "NA", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-1029", "1")
+                    setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "Miscellaneous", "jCape-Server", "NA", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-1265", "1")
+
+//                     setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "UI-App-Info", "jCape-Server", "firefox", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-2367 and (@All-Browser or @Firefox)", "1")
+                    setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "UI-App-Info", "jCape-Server", "chrome", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-2367 and (@All-Browser or @Chrome)", "1")
+//                     setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "UI-AWS", "jCape-Server", "firefox", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-2292 and (@All-Browser or @Firefox)", "1")
+                    setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "UI-AWS", "jCape-Server", "chrome", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-2292 and (@All-Browser or @Chrome)", "1")
+//                     setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "UI-Installers", "jCape-Server", "firefox", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-2415 and (@All-Browser or @Firefox)", "1")
+                    setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "UI-Installers", "jCape-Server", "chrome", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-2415 and (@All-Browser or @Chrome)", "1")
+
+                     setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "Analyze", "Thingsboard", "NA", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-1031", "1")
+//                     setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "Rules-Matches", "Java", "NA", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-1617", "1")
+//                     setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "Rules-Matches", "MySQL", "NA", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-1946", "1")
+//                     setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "Rules-Matches", "Postgres", "NA", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-1672", "1")
+//                     setSequentialFeatureExecution("Ubuntu-20.04", "In-Server", "Rules-Matches", "SQLite", "NA", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-1947", "1")
+
+
+//                     // Ubuntu-20.04 Remote server
+//                     setSequentialFeatureExecution("Ubuntu-20.04", "Ubuntu-18.04", "Install", "jCape-Agent", "NA", "(@All-OS or @Ubuntu-18.04) and @TEST_QA-412", "1")
+//                     setSequentialFeatureExecution("Ubuntu-20.04", "Ubuntu-18.04", "Analyze", "Thingsboard", "NA", "(@All-OS or @Ubuntu-18.04) and @TESTSET_QA-1031", "1")
+//                     setSequentialFeatureExecution("Ubuntu-20.04", "Ubuntu-20.04", "Install", "jCape-Agent", "NA", "(@All-OS or @Ubuntu-20.04) and @TEST_QA-412", "1")
+//                     setSequentialFeatureExecution("Ubuntu-20.04", "Ubuntu-20.04", "Analyze", "Thingsboard", "NA", "(@All-OS or @Ubuntu-20.04) and @TESTSET_QA-1031", "1")
+
+//                     // fedora-34 server
+//                     setSequentialFeatureExecution("fedora-34", "In-Server", "Server-Defaults", "jCape-Server", "NA", "(@All-OS or @Fedora-34) and @TESTSET_QA-1027", "1")
+//                     setSequentialFeatureExecution("fedora-34", "In-Server", "Audit-Rule-Defaults", "jCape-Server", "NA", "(@All-OS or @Fedora-34) and @TESTSET_QA-1030", "1")
+//                     setSequentialFeatureExecution("fedora-34", "In-Server", "AWS-Defaults", "jCape-Server", "NA", "(@All-OS or @Fedora-34) and @TESTSET_QA-1028", "1")
+//                     setSequentialFeatureExecution("fedora-34", "In-Server", "Service-Now-Defaults", "jCape-Server", "NA", "(@All-OS or @Fedora-34) and @TESTSET_QA-1029", "1")
+//                     setSequentialFeatureExecution("fedora-34", "In-Server", "Miscellaneous", "jCape-Server", "NA", "(@All-OS or @Fedora-34) and @TESTSET_QA-1265", "1")
+
+
+//                     // rhel-8.4 server
+//                     setSequentialFeatureExecution("RHEL-8.4", "In-Server", "Server-Defaults", "jCape-Server", "NA", "(@All-OS or @RHEL-8.4) and @TESTSET_QA-1027", "1")
+//                     setSequentialFeatureExecution("RHEL-8.4", "In-Server", "Audit-Rule-Defaults", "jCape-Server", "NA", "(@All-OS or @RHEL-8.4) and @TESTSET_QA-1030", "1")
+//                     setSequentialFeatureExecution("RHEL-8.4", "In-Server", "AWS-Defaults", "jCape-Server", "NA", "(@All-OS or @RHEL-8.4) and @TESTSET_QA-1028", "1")
+//                     setSequentialFeatureExecution("RHEL-8.4", "In-Server", "Service-Now-Defaults", "jCape-Server", "NA", "(@All-OS or @RHEL-8.4) and @TESTSET_QA-1029", "1")
+//                     setSequentialFeatureExecution("RHEL-8.4", "In-Server", "Miscellaneous", "jCape-Server", "NA", "(@All-OS or @RHEL-8.4) and @TESTSET_QA-1265", "1")
+                }
+	        }
+		}
+
+		stage('Build Automation Artefacts') {
+            when {
+                expression { BRANCH_NAME ==~ /(integration|qa|master|feature\/.*)/ }
+            }
+            steps {
+
+				// Setup the folder
+				echo "Setting up artefacts folders"
+				sh('''
+					sudo chmod -R 777 ${PWD}
+					rm -Rfd ${PWD}/tmp
+					rm -Rfd ${PWD}/target
+					mkdir -p ${PWD}/tmp
+					mkdir -p ${PWD}/target
+					sudo chmod -R 777 ${PWD}
+                ''')
+
+                // Maven steps
+				echo "Build automation artefacts using maven"
+                sh('''
+					docker run --rm                        \
+                      --workdir /app/                      \
+					  --volume ${PWD}/tmp/:/tmp/.m2/            \
+					  -e MAVEN_CONFIG=/tmp/.m2             \
+                      --user `id -u`:`id -g`               \
+                      --volume ${PWD}:/app/                \
+                      -e MAVEN_CONFIG=/tmp                 \
+					  -e "ARTIFACTORY_CREDS_PSW=${ARTIFACTORY_CREDS_PSW}" \
+                      -e "ARTIFACTORY_CREDS_USR=${ARTIFACTORY_CREDS_USR}" \
+                      maven:3.6.3-jdk-11                   \
+                      sh -c 'mvn compile package assembly:single -Dmaven.repo.local=/tmp/.m2/repository/ -Duser.home=/tmp  -DskipTests'
+					''')
+				echo "going to stash the artefacts...."
+				stash includes: '**', name: 'huseby-jar'
+            }
+        }
+
+        stage('Automation Run') {
+            steps {
+                script {
+                    if(BRANCH_NAME == "qa") {
+                        env.logLevel = "INFO"
+                    } else {
+                        env.logLevel = "TRACE"
+                    }
+
+
+                    productName = (params.productName != null ? params.productName : productName)
+                    releaseVersion = (params.releaseVersion != null ? params.releaseVersion : releaseVersion)
+                    buildNumber = (params.buildNumber != null ? params.buildNumber : buildNumber)
+
+                    echo "Loop through the servers"
+                    listOfSequentialExecutions.each { executionItem ->
+                        String serverOS = executionItem.key
+                        echo "executionItem.key -  ${executionItem.value}"
+                        serverRuns["${serverOS}-JCape-Server"] = {
+                            node("qa-${serverOS}") {
+                                String NODE_INSTANCE_IP =  getNodeIP()
+                                unstash name: 'huseby-jar'
+
+                                setEnvironment("${serverOS}", "In-Server", "${serverArchiveUrl[serverOS]}", "${serverArchiveKey[serverOS]}", "${productName}",
+                                                                                  "${env.releaseVersion}", "${env.buildNumber}", "${networkAdapter}", "${env.logLevel}")
+                                echo "Loop 1"
+                                echo "executionItem - ${executionItem}"
+                                agentSequentialExecutionDetails = listOfSequentialExecutions[serverOS]
+                                agentParallelExecutionDetails = listOfParallelExecutions[serverOS]
+                                echo "${agentSequentialExecutionDetails}"
+
+                                echo "------------------------------ Install jCape Server ------------------------------"
+                                installjCapeServer("${serverOS}", "${serverCucumberTags[serverOS]}", "${serverArchiveUrl[serverOS]}", "${serverArchiveKey[serverOS]}", "${productName}",
+                                    "${env.releaseVersion}", "${env.buildNumber}", "${networkAdapter}", "${env.logLevel}")
+
+                                echo "------------------------------ Run In-Server feature files ------------------------------"
+                                testSequentialExecutionInServer("${serverOS}", "In-Server", agentSequentialExecutionDetails["In-Server"], "${serverArchiveUrl[serverOS]}", "${serverArchiveKey[serverOS]}", "${productName}",
+                                    "${env.releaseVersion}", "${env.buildNumber}","${networkAdapter}", "${env.logLevel}")
+
+                                echo "------------------------------ Run remote sequential feature files ------------------------------"
+                                testSequentialExecutionRemoteAgent( "${serverOS}", agentSequentialExecutionDetails, "${serverArchiveUrl[serverOS]}", "${serverArchiveKey[serverOS]}", "${productName}",
+                                    "${env.releaseVersion}", "${env.buildNumber}","${networkAdapter}", "${env.logLevel}", "${NODE_INSTANCE_IP}")
+
+                                echo "------------------------------ Run remote parallel feature files ------------------------------"
+                                testParallelExecutionRemoteAgent( "${serverOS}", agentParallelExecutionDetails, "${serverArchiveUrl[serverOS]}", "${serverArchiveKey[serverOS]}", "${productName}",
+                                    "${env.releaseVersion}", "${env.buildNumber}","${networkAdapter}", "${env.logLevel}", "${NODE_INSTANCE_IP}")
+
+                                stash includes: 'target/*.json', name: "json-${serverOS}-JCape-Server"
+                                stash includes: '*.log', name: "log-${serverOS}-JCape-Server"
+                            }
+                            unstash name: "json-${serverOS}-JCape-Server"
+                            unstash name: "log-${serverOS}-JCape-Server"
+
+                            stash name: "json-${serverOS}-JCape-Server", excludes: "**", allowEmpty: true
+                            stash name: "log-${serverOS}-JCape-Server", excludes: "**", allowEmpty: true
+                        }
+                    }
+                    echo "Parallel run stage"
+                    parallel serverRuns
+                    echo "Success in parallel run stage"
+                }
+           }
+        }
+
+		stage("Cucumber Multi-Report") {
+		    steps {
+                script {
+                    sh("mkdir ./report")
+                    sh("chmod 777 -R ./report")
+                    sh("mkdir ./MultiReport")
+                    sh("cp ./target/MultiReport*.json ./MultiReport")
+
+                    docker.withRegistry("https://130246223486.dkr.ecr.us-east-2.amazonaws.com", 'ecr:us-east-2:brandontylkeawscreds') {
+                        def servicesImage = docker.build("huseby-qa:img-multi-cucumber-report", "-f ./docker/img-multi-cucumber-report/Dockerfile ./docker/img-multi-cucumber-report/.")
+                        echo "Build of the image is success, now push the image"
+                        servicesImage.push("img-multi-cucumber-report")
+
+                        sh("sudo docker run                                                     \
+                          -td                                                          \
+                          --workdir /app/                      \
+                          --volume ${WORKSPACE}:/app/                         \
+                          --name cl-multi-cucumber-report \
+                          130246223486.dkr.ecr.us-east-2.amazonaws.com/huseby-qa:img-multi-cucumber-report")
+                    }
+                    sh("sudo docker exec cl-multi-cucumber-report node /index.js")
+                    sh("sudo docker container rm cl-multi-cucumber-report -f")
+                    sh("sed -i 's/>jCape</>${productName}</g' ./report/index.html")
+                    sh("sed -i 's/>1.2.3</>${env.releaseVersion}</g' ./report/index.html")
+                    sh("sed -i 's/>B11221.34321</>${env.buildNumber}</g' ./report/index.html")
+                    sh("sed -i 's/>Nov 19th 2017, 02:31 PM EST</>${env.executionStartTime}</g' ./report/index.html")
+                    def endTime = sh(returnStdout: true, script: "date '+%b %d %Y, %H:%M %p %Z'")
+                    env.executionEndTime = endTime.trim()
+                    sh("sed -i 's/>Nov 19th 2017, 02:56 PM EST</>${env.executionEndTime}</g' ./report/index.html")
+                }
+		    }
+		}
+
+		stage("Check for failure") {
+            steps {
+                script {
+                    try{
+                         sh("sudo java -jar -DserverOS='NA' -Dcucumber.filter.tags='@CheckResultJSON' -DagentOS= \
+                            -DactionType='NA' -DapplicationName=jCape-Server -DlogLevel=${env.logLevel} \
+                            -DTARGET_NO_SSH='true' -DrepoURL='NA' \
+                            -DrepoKey='NA' \
+                            -DnetworkAdapter='NA' \
+                            -DprotocolPort='NA' -Dprotocol='NA' -DagentBrowser='NA' \
+                            -DreportFolder='./MultiReport' \
+                            -DproductName='NA' -DreleaseVersion='NA' -DbuildNumber='NA' \
+                            ./target/huseby.jar classpath:features 2>&1 | tee ./CheckResultJSON.log"
+                         )
+                         def failed = sh(true, "cat ./CheckResultJSON.log | grep 'failure step count'")
+                         if(failed != null) {
+                             echo "One or more scenarios failed in automation run"
+                             echo "Exception - ${ex.message}"
+                             currentBuild.result = 'FAILURE'
+                         }
+                    } catch (Exception ex) {
+                         echo "One or more scenarios failed in automation run"
+                         echo "Exception - ${ex.message}"
+                         currentBuild.result = 'FAILURE'
+                    }
+                }
+            }
+        }
+	}
+
+	// Post pipeline actions
+	post {
+		success {
+			script {
+			    echo "Automation Run Passed"
+				if ((env.BRANCH_NAME == 'qa')) {
+					slackSend(
+						channel: '#jenkins',
+						color: '#3cc400',
+						message: ":shipit: BUILD SUCCESSFUL: '${env.JOB_NAME} [${env.buildNumber}]' \n${CHANGE_LOG} (<${env.BUILD_URL}>|Open)"
+					)
+				}
+			}
+		}
+
+		failure {
+			script {
+			    echo "Automation Run Failed"
+				if ((env.BRANCH_NAME == 'qa')) {
+					slackSend(
+							channel: '#jenkins',
+							color: '#971b00',
+							message: ":octagonal_sign: <!here> BUILD FAILED: '${env.JOB_NAME} [${env.buildNumber}]' \n${CHANGE_LOG} (<${env.BUILD_URL}>|Open)")
+				}
+			}
+		}
+
+		// Always perform this code, even if the pipeline stages fail
+		always {
+		    stash name: "huseby-jar", excludes: "**", allowEmpty: true
+
+		    // Archive cucumber json results
+		    archiveArtifacts artifacts: "target/*.json"
+            // archiveArtifacts artifacts: "*.tar.gz"
+            archiveArtifacts artifacts: "*.log", excludes: "app*.log"
+
+            // Publish HTML Report
+            publishHTML (target : [allowMissing: false,
+                                   alwaysLinkToLastBuild: true,
+                                   keepAll: true,
+                                   reportDir: './report',
+                                   reportFiles: 'index.html',
+                                   reportName: "UI Automation Reports",
+                                   reportTitles: "UI Automation Reports"])
+
+            // Clean out the workspace
+			cleanWs()
+		}
+	}
+}

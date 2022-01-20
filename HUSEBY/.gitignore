@@ -1,0 +1,12 @@
+/target/
+/screenshots/*/*png
+/test-output/
+/.idea/
+/crosscode.ui.automation.iml
+/allure-report
+/allure-results
+/.classpath
+/.settings
+/.project
+/app-info.log
+**/*.log

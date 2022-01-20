@@ -1,0 +1,104 @@
+[
+	{
+		"line": 1,
+		"elements": [
+			{
+				"start_timestamp": "2021-12-28T06:46:03.087Z",
+				"before": [
+					{
+						"output": [
+							"Server OS : In-Server",
+							"Agent OS : Ubuntu-20.04",
+							"Application Name : jCape-Java-Agent",
+							"Action Type : Install-Analyze",
+							"jCape host IP :10.0.2.15",
+							"Repository key: http://repo.huseby.com/debian/archive.key",
+							"Repository URL: http://repo.huseby.com/debian",
+							"getToken() read all configuration variables",
+							"getToken() prepared request url - oauth2/token?grant_type=password&client_id=7fd32680-700e-4bfc-9ac0-bb7e17f63b70&client_secret=lKgKq46Ol2hgNmRJXwCtKGog0SlJwJj2nwR6-6WFNlw&username=temporaryadmin@huseby.com&password=!Default-CC1"
+						],
+						"result": {
+							"duration": 8811524000,
+							"status": "passed"
+						},
+						"match": {
+							"location": "com.huseby.steps.StepHooks.before(io.cucumber.java.Scenario)"
+						}
+					}
+				],
+				"line": 44,
+				"name": "Check for incorrect cucumber tag",
+				"description": "",
+				"id": "Check for incorrect cucumber tag",
+				"after": [
+					{
+						"result": {
+							"duration": 900000,
+							"status": "failed"
+						},
+						"match": {
+							"location": "com.huseby.steps.StepHooks.after(io.cucumber.java.Scenario)"
+						}
+					}
+				],
+				"type": "scenario",
+				"keyword": "Scenario",
+				"steps": [
+					{
+						"result": {
+							"duration": 102532000,
+							"status": "passed"
+						},
+						"line": 45,
+						"name": "a cucumber tag",
+						"match": {
+							"location": "com.huseby.steps.jCapeSetEnvironmentSteps.thatMachineIsAccessibleOverNetwork()"
+						},
+						"keyword": "Given "
+					},
+					{
+						"output": [
+							""
+						],
+						"result": {
+							"duration": 45072313000,
+							"status": "passed"
+						},
+						"line": 46,
+						"name": "scenario run",
+						"match": {
+							"location": "com.huseby.steps.jCapeSetEnvironmentSteps.installAppOnOs(java.lang.String,java.lang.String)"
+						},
+						"keyword": "When "
+					},
+					{
+						"output": [
+							" "
+						],
+						"result": {
+							"duration": 69014000,
+							"status": "failed"
+						},
+						"line": 47,
+						"name": "it should pass",
+						"match": {
+							"location": "com.huseby.steps.jCapeSetEnvironmentSteps.appShouldBeRunningOnOs(java.lang.String,java.lang.String)"
+						},
+						"keyword": "Then "
+					}
+				],
+				"tags": [
+					{
+						"name": "@TEST_QA-unknown"
+					}
+				]
+			}
+		],
+		"name": "CUCUMBER_TAG",
+		"description": "",
+		"id": "",
+		"keyword": "Feature",
+		"uri": "classpath:features/jCapeSetEnvironment.feature",
+		"tags": []
+	}
+]
